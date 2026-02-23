@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>예수 개수 계수</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin: 0; display: flex; flex-direction: column; height: 100vh; }
+        .top-bar { width: 100%; text-align: center; margin: 20px 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 10px; }
+        .top-row { display: flex; justify-content: center; align-items: center; gap: 10px; }
+
+        #number-input { font-size: 24px; padding: 10px; width: 200px; text-align: center; appearance: textfield; border: 2px solid #ccc; border-radius: 5px; }
+        #number-input::-webkit-outer-spin-button,
+        #number-input::-webkit-inner-spin-button { display: none; }
+
+        #submit-button, #reset-button { font-size: 20px; padding: 10px 20px; border: none; border-radius: 5px; background-color: #007BFF; color: white; cursor: pointer; }
+        #reset-button { background-color: #DC3545; }
+
+        .hint {
+            font-size: 14px;
+            line-height: 1.4;
+            color: #333;
+            min-height: 20px;
+        }
+        .hint.ok { color: #198754; }
+        .hint.bad { color: #dc3545; }
+        .hint.info { color: #0d6efd; }
+
+        .container { display: flex; width: 100%; height: 100%; }
+        .half { width: 50%; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+
+        .word-box { display: grid; gap: 5px; justify-content: center; align-items: center; padding: 20px; background-color: #f9f9f9; border-radius: 10px; border: 2px solid #ccc; }
+        .word { padding: 15px; background-color: #ffffff; border: 2px solid #ccc; display: flex; align-items: center; justify-content: center; font-size: 1.8em; width: 80px; height: 80px; border-radius: 5px; text-align: center; font-weight: bold; box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.1); }
+
+        .grid-container { display: grid; grid-template-columns: repeat(4, 100px); grid-template-rows: repeat(4, 100px); gap: 10px; padding: 20px; background-color: #f9f9f9; border-radius: 10px; border: 2px solid #ccc; }
+
+        .card { width: 100px; height: 100px; background-color: #ddd; display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative; border-radius: 5px; font-size: 24px; font-weight: bold; transition: transform 0.3s; user-select: none; }
+        .card img { width: 100%; height: 100%; position: absolute; border-radius: 5px; display: none; }
+        .card.flipped { transform: rotateY(180deg); }
+        .card.matched { background-color: #aaffaa; pointer-events: none; }
+
+        /* 카드판 비활성화 UI */
+        .grid-disabled {
+            pointer-events: none;
+            opacity: 0.45;
+            filter: grayscale(0.6);
+        }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <div class="top-row">
+            <input type="number" id="number-input" placeholder="숫자를 입력하세요">
+            <button id="submit-button">제출</button>
+            <button id="reset-button">Reset</button>
+        </div>
+        <div id="hint" class="hint"></div>
+    </div>
+
+    <div class="container">
+        <div class="half">
+            <div class="word-box" id="word-box"></div>
+        </div>
+        <div class="half">
+            <div class="grid-container" id="grid-container"></div>
+        </div>
+    </div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+    const numberInput = document.getElementById("number-input");
+    const submitButton = document.getElementById("submit-button");
+    const resetButton = document.getElementById("reset-button");
+    const gridContainer = document.getElementById("grid-container");
+    const wordBox = document.getElementById("word-box");
+    const hintEl = document.getElementById("hint");
+
+    // ====== 게임 상태 ======
+    // LOCKED: 숫자 맞춰야 판 열림
+    // PLAYING: 판 열려서 "1쌍 시도" 중 (실패는 계속 가능, 성공 시 다시 LOCKED)
+    // CLEARED: 전부 맞춤
+    const State = Object.freeze({ LOCKED: "LOCKED", PLAYING: "PLAYING", CLEARED: "CLEARED" });
+    let state = State.LOCKED;
+
+    let selectedCards = [];
+    let isBusy = false;
+
+    let matchedPairs = 0;
+    const TOTAL_PAIRS = 8;
+
+    // ✅ 성공할 때마다 좌측 word grid 확장: 1x1 -> 2x2 -> ... -> 5x5
+    let gridSize = 1;
+    const maxGridSize = 5;
+
+    const words = [
+        "예수", "인수", "제수", "예수", "이주",
+        "야수", "정수", "영수", "예수", "영주",
+        "예수", "인수", "제수", "예수", "예지",
+        "야수", "정수", "장수", "예숭", "영주",
+        "여수", "잔성", "인산", "연선", "영주",
+        "연수", "인수", "제수", "예수", "이주",
+    ];
+
+    function setHint(text, type = "info") {
+        hintEl.textContent = text;
+        hintEl.classList.remove("ok", "bad", "info");
+        hintEl.classList.add(type);
+    }
+
+    function setInputEnabled(enabled) {
+        numberInput.disabled = !enabled;
+        submitButton.disabled = !enabled;
+        submitButton.style.opacity = enabled ? "1" : "0.55";
+        numberInput.style.opacity = enabled ? "1" : "0.7";
+    }
+
+    function setBoardEnabled(enabled) {
+        gridContainer.classList.toggle("grid-disabled", !enabled);
+    }
+
+    function setState(next) {
+        state = next;
+
+        if (state === State.LOCKED) {
+            setBoardEnabled(false);
+            setInputEnabled(true);
+        } else if (state === State.PLAYING) {
+            setBoardEnabled(true);
+            setInputEnabled(false);
+        } else if (state === State.CLEARED) {
+            setBoardEnabled(false);
+            setInputEnabled(false);
+        }
+    }
+
+    function shuffle(arr) {
+        const a = [...arr];
+        for (let i = a.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [a[i], a[j]] = [a[j], a[i]];
+        }
+        return a;
+    }
+
+    function generateWordGrid(size) {
+        const adjustedSize = Math.min(size, maxGridSize);
+
+        wordBox.innerHTML = "";
+        wordBox.style.display = "grid";
+        wordBox.style.gridTemplateColumns = `repeat(${adjustedSize}, 1fr)`;
+        wordBox.style.gridTemplateRows = `repeat(${adjustedSize}, 1fr)`;
+
+        const shuffledWords = shuffle(words).slice(0, adjustedSize * adjustedSize);
+        shuffledWords.forEach(word => {
+            const wordDiv = document.createElement("div");
+            wordDiv.classList.add("word");
+            wordDiv.textContent = word;
+            wordBox.appendChild(wordDiv);
+        });
+    }
+
+    function countYesu() {
+        return Array.from(wordBox.children).filter(el => el.textContent === "예수").length;
+    }
+
+    function flipOpen(card) {
+        card.classList.add("flipped");
+        card.querySelector("img").style.display = "block";
+        const num = card.querySelector(".card-number");
+        if (num) num.style.display = "none";
+    }
+
+    function flipClose(card) {
+        if (card.classList.contains("matched")) return;
+        card.classList.remove("flipped");
+        card.querySelector("img").style.display = "none";
+        const num = card.querySelector(".card-number");
+        if (num) num.style.display = "block";
+    }
+
+    function clearSelection() {
+        selectedCards = [];
+    }
+
+    function generateImageGrid() {
+        gridContainer.innerHTML = "";
+
+        const images = Array.from({ length: 8 }, (_, i) => `img/image${i + 1}.jpg`);
+        const deck = shuffle([...images, ...images]);
+
+        deck.forEach((imageSrc, index) => {
+            const card = document.createElement("div");
+            card.classList.add("card");
+            card.dataset.image = imageSrc;
+
+            const img = document.createElement("img");
+            img.src = imageSrc;
+            img.style.display = "none";
+            card.appendChild(img);
+
+            const text = document.createElement("span");
+            text.textContent = index + 1;
+            text.classList.add("card-number");
+            text.style.position = "absolute";
+            text.style.zIndex = "1";
+            card.appendChild(text);
+
+            card.addEventListener("click", () => handleCardClick(card));
+            gridContainer.appendChild(card);
+        });
+
+        matchedPairs = 0;
+        clearSelection();
+        isBusy = false;
+    }
+
+    function handleCardClick(card) {
+        if (state !== State.PLAYING) return;
+        if (isBusy) return;
+        if (card.classList.contains("matched")) return;
+        if (selectedCards.includes(card)) return;
+        if (selectedCards.length >= 2) return;
+
+        flipOpen(card);
+        selectedCards.push(card);
+
+        if (selectedCards.length === 2) {
+            isBusy = true;
+            setTimeout(checkMatch, 650);
+        }
+    }
+
+    function checkMatch() {
+        const [a, b] = selectedCards;
+        const isMatch = a.dataset.image === b.dataset.image;
+
+        if (isMatch) {
+            a.classList.add("matched");
+            b.classList.add("matched");
+            matchedPairs++;
+
+            clearSelection();
+            isBusy = false;
+
+            if (matchedPairs >= TOTAL_PAIRS) {
+                setState(State.CLEARED);
+                setHint("🎉 전부 맞췄어요! 게임 클리어!", "ok");
+                return;
+            }
+
+            // ✅ 성공하면 좌측 grid를 1단계 키우고(최대 5), 다시 숫자 맞추러 LOCKED
+            if (gridSize < maxGridSize) {
+                // 1x1 → 2x2 → ... → 5x5
+                gridSize++;
+                generateWordGrid(gridSize);
+            } else {
+                // 이미 5x5면 크기는 유지, 단어만 셔플
+                generateWordGrid(gridSize);
+            }
+
+            setState(State.LOCKED);
+            setHint(
+                `짝 맞추기 성공! (${matchedPairs}/${TOTAL_PAIRS}) ` +
+                `왼쪽이 ${gridSize}x${gridSize}로 커졌어요. 다음 1쌍을 하려면 "예수" 개수를 맞추고 제출하세요.`,
+                "ok"
+            );
+            numberInput.value = "";
+            numberInput.focus();
+            return;
+        }
+
+        // ❌ 실패면 바로 재시도 가능 (판 유지, input 요구 X)
+        flipClose(a);
+        flipClose(b);
+        clearSelection();
+        isBusy = false;
+
+        setHint(`짝이 아니에요. 계속 1쌍을 다시 시도하세요. (진행 ${matchedPairs}/${TOTAL_PAIRS})`, "bad");
+    }
+
+    function handleSubmit() {
+        if (state !== State.LOCKED) return;
+
+        const inputVal = parseInt(numberInput.value, 10);
+        if (Number.isNaN(inputVal)) {
+            setHint(`숫자를 입력한 뒤 제출하세요.`, "bad");
+            numberInput.focus();
+            return;
+        }
+
+        const yesuCount = countYesu();
+
+        if (inputVal === yesuCount) {
+            setState(State.PLAYING);
+            setHint(`정답! 이제 오른쪽에서 1쌍을 맞춰보세요. (진행 ${matchedPairs}/${TOTAL_PAIRS})`, "ok");
+            return;
+        }
+
+        setHint(`틀렸어요. 왼쪽 "예수" 개수를 다시 세고 입력하세요.`, "bad");
+        numberInput.select();
+    }
+
+    function resetGame() {
+        gridSize = 1;
+        generateWordGrid(gridSize);
+        generateImageGrid();
+
+        setState(State.LOCKED);
+        setHint(`왼쪽에서 "예수"가 몇 개인지 세고, 숫자를 입력한 뒤 제출하세요. (현재 ${gridSize}x${gridSize})`, "info");
+        numberInput.value = "";
+        numberInput.focus();
+    }
+
+    submitButton.addEventListener("click", handleSubmit);
+    numberInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") handleSubmit();
+    });
+    resetButton.addEventListener("click", resetGame);
+
+    // 최초 시작
+    resetGame();
+});
+</script>
+</body>
+</html>
